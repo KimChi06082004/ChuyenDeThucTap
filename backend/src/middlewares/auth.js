@@ -1,17 +1,19 @@
-// src/middlewares/auth.js
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
 dotenv.config();
 
-// ===== Token Helpers =====
+/**
+ * ========== TOKEN HELPERS ==========
+ * Sinh accessToken / refreshToken & tiện ích tạo cả 2 cùng lúc.
+ */
 export const signAccess = (payload) =>
   jwt.sign(payload, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES || "30m",
+    expiresIn: process.env.JWT_EXPIRES || "30m", // Access Token sống 30 phút
   });
 
 export const signRefresh = (payload) =>
   jwt.sign(payload, process.env.REFRESH_SECRET, {
-    expiresIn: process.env.REFRESH_EXPIRES || "7d",
+    expiresIn: process.env.REFRESH_EXPIRES || "7d", // Refresh Token sống 7 ngày
   });
 
 export const signTokens = (payload) => ({
@@ -19,36 +21,61 @@ export const signTokens = (payload) => ({
   refreshToken: signRefresh(payload),
 });
 
-// ===== Middleware: Verify Token =====
+/**
+ * ========== VERIFY TOKEN ==========
+ * Middleware xác minh token, giải mã và gắn vào req.user
+ */
 export const verifyToken = (req, res, next) => {
   try {
-    const h = req.headers.authorization || "";
-    const token = h.startsWith("Bearer ") ? h.substring(7) : null;
+    const authHeader = req.headers.authorization || "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
 
     if (!token) {
-      return res.status(401).json({ success: false, message: "No token" });
+      return res
+        .status(401)
+        .json({ success: false, message: "❌ Thiếu token xác thực" });
     }
 
+    // Giải mã token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded; // { user_id, role, full_name }
+
+    // Gắn thông tin người dùng vào request
+    req.user = {
+      id: decoded.user_id || decoded.id,
+      role: decoded.role,
+      full_name: decoded.full_name,
+    };
+
     next();
-  } catch (e) {
-    console.error("JWT error:", e.message);
-    return res.status(401).json({ success: false, message: "Invalid token" });
+  } catch (error) {
+    console.error("JWT verify error:", error.message);
+    return res
+      .status(401)
+      .json({
+        success: false,
+        message: "❌ Token không hợp lệ hoặc đã hết hạn",
+      });
   }
 };
 
-// ===== Middleware: Require Role(s) =====
+/**
+ * ========== ROLE-BASED AUTH ==========
+ * Kiểm tra quyền truy cập theo vai trò (role)
+ * Ví dụ: requireRole(['admin', 'cskh'])
+ */
 export const requireRole = (roles = []) => {
   return (req, res, next) => {
     if (!req.user) {
-      return res.status(401).json({ success: false, message: "Unauthorized" });
+      return res
+        .status(401)
+        .json({ success: false, message: "❌ Không có quyền truy cập" });
     }
 
     if (roles.length && !roles.includes(req.user.role)) {
-      return res
-        .status(403)
-        .json({ success: false, message: "Forbidden: insufficient role" });
+      return res.status(403).json({
+        success: false,
+        message: `🚫 Quyền hạn không đủ (yêu cầu: ${roles.join(", ")})`,
+      });
     }
 
     next();

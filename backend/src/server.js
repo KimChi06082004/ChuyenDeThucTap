@@ -39,6 +39,9 @@ app.use("/api/payouts", payoutRoutes);
 app.use("/api/complaints", complaintRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/ratings", ratingRoutes);
+import uploadRoutes from "./routes/upload.js";
+app.use("/api/upload", uploadRoutes);
+app.use("/uploads", express.static("uploads"));
 // Default route
 app.get("/", (req, res) => {
   res.send("🚀 Website Dạy Thêm API is running...");
