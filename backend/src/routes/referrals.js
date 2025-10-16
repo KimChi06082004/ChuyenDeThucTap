@@ -2,7 +2,7 @@
 import { Router } from "express";
 import { pool } from "../config/db.js";
 import { verifyToken, requireRole } from "../middlewares/auth.js";
-
+import jwt from "jsonwebtoken";
 const router = Router();
 
 // GET /api/referrals/my-code
@@ -93,5 +93,25 @@ router.put("/:id", verifyToken, requireRole(["admin"]), async (req, res) => {
   }
   res.json({ success: true, message: "Referral updated" });
 });
+router.post("/refresh", (req, res) => {
+  try {
+    const refreshToken = req.body.refreshToken;
+    if (!refreshToken)
+      return res.status(401).json({ message: "Thiếu refresh token" });
 
+    const decoded = jwt.verify(refreshToken, process.env.REFRESH_SECRET);
+    const newAccessToken = signAccess({
+      user_id: decoded.user_id,
+      full_name: decoded.full_name,
+      role: decoded.role,
+      email: decoded.email,
+    });
+
+    res.json({ accessToken: newAccessToken });
+  } catch (err) {
+    res
+      .status(403)
+      .json({ message: "Refresh token không hợp lệ hoặc hết hạn" });
+  }
+});
 export default router;

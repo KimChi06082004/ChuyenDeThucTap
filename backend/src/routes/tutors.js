@@ -7,8 +7,7 @@ const router = express.Router();
 
 /**
  * ============================================================
- *  ⚙️ 1. ADMIN – Xem danh sách hồ sơ chờ duyệt
- *  (đặt trước /:id để tránh xung đột)
+ * ⚙️ 1. ADMIN – Danh sách hồ sơ chờ duyệt
  * ============================================================
  */
 router.get(
@@ -18,25 +17,24 @@ router.get(
   async (req, res) => {
     try {
       const [rows] = await pool.query(
-        `SELECT tutor_id, full_name, university, major, avatar, status, created_at 
-         FROM tutors 
-         WHERE status='PENDING' 
+        `SELECT tutor_id, full_name, university, major, avatar, status, created_at
+         FROM tutors
+         WHERE status='PENDING'
          ORDER BY created_at DESC`
       );
       res.json({ success: true, data: rows });
     } catch (err) {
-      console.error("Get pending tutors error:", err);
-      res.status(500).json({
-        success: false,
-        message: "Server error: " + err.message,
-      });
+      console.error("❌ Get pending tutors error:", err);
+      res
+        .status(500)
+        .json({ success: false, message: "Server error: " + err.message });
     }
   }
 );
 
 /**
  * ============================================================
- *  ⚙️ 2. Lấy danh sách gia sư (chỉ hiển thị APPROVED cho học viên)
+ * ⚙️ 2. HỌC VIÊN – Lấy danh sách gia sư (APPROVED)
  * ============================================================
  */
 router.get("/", async (req, res) => {
@@ -50,16 +48,20 @@ router.get("/", async (req, res) => {
       page = 1,
     } = req.query;
 
-    let sql = "SELECT * FROM tutors WHERE 1=1";
+    let sql = `
+      SELECT tutor_id, full_name, avatar, city, subject, hourly_rate, lat, lng
+      FROM tutors
+      WHERE 1=1
+    `;
     const params = [];
 
     if (subject) {
       sql += " AND subject LIKE ?";
-      params.push(`%${decodeURIComponent(subject)}%`);
+      params.push(`%${subject}%`);
     }
     if (city) {
       sql += " AND city LIKE ?";
-      params.push(`%${decodeURIComponent(city)}%`);
+      params.push(`%${city}%`);
     }
     if (priceMin) {
       sql += " AND hourly_rate >= ?";
@@ -78,16 +80,41 @@ router.get("/", async (req, res) => {
     params.push((page - 1) * 10);
 
     const [rows] = await pool.query(sql, params);
-    res.json(rows);
+    res.json({ success: true, data: rows });
   } catch (err) {
-    console.error("Tutors list error:", err);
-    res.status(500).json({ message: "Server error" });
+    console.error("❌ Tutors list error:", err);
+    res
+      .status(500)
+      .json({ success: false, message: "Server error: " + err.message });
   }
 });
 
 /**
  * ============================================================
- *  ⚙️ 3. Lấy chi tiết hồ sơ gia sư
+ * ⚙️ 3. GIA SƯ – Lấy danh sách học viên có tọa độ (để hiển thị map)
+ * ============================================================
+ */
+router.get("/students", async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT student_id, full_name, avatar, city, lat, lng
+      FROM students
+      WHERE lat IS NOT NULL AND lng IS NOT NULL
+      ORDER BY student_id DESC
+      LIMIT 50
+    `);
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    console.error("❌ Students list error:", err);
+    res
+      .status(500)
+      .json({ success: false, message: "Server error: " + err.message });
+  }
+});
+
+/**
+ * ============================================================
+ * ⚙️ 4. Lấy chi tiết hồ sơ gia sư
  * ============================================================
  */
 router.get("/:id", async (req, res) => {
@@ -97,16 +124,18 @@ router.get("/:id", async (req, res) => {
     ]);
     if (!rows.length)
       return res.status(404).json({ message: "Tutor not found" });
-    res.json(rows[0]);
+    res.json({ success: true, data: rows[0] });
   } catch (err) {
-    console.error("Get tutor error:", err);
-    res.status(500).json({ message: "Server error" });
+    console.error("❌ Get tutor detail error:", err);
+    res
+      .status(500)
+      .json({ success: false, message: "Server error: " + err.message });
   }
 });
 
 /**
  * ============================================================
- *  ⚙️ 4. Gia sư gửi hồ sơ chờ duyệt
+ * ⚙️ 5. GỬI CV – Gia sư tạo hồ sơ chờ duyệt
  * ============================================================
  */
 router.post("/submit-cv", verifyToken, async (req, res) => {
@@ -128,18 +157,11 @@ router.post("/submit-cv", verifyToken, async (req, res) => {
     if (!full_name || !avatar) {
       return res.status(400).json({
         success: false,
-        message: "⚠️ Vui lòng điền đầy đủ thông tin trước khi gửi!",
+        message: "⚠️ Vui lòng điền đầy đủ thông tin!",
       });
     }
 
     const user_id = req.user?.user_id || req.user?.id;
-    if (!user_id) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Thiếu user_id trong token" });
-    }
-
-    // kiểm tra nếu đã có hồ sơ → update lại
     const [exists] = await pool.query(
       "SELECT tutor_id FROM tutors WHERE user_id=?",
       [user_id]
@@ -147,11 +169,9 @@ router.post("/submit-cv", verifyToken, async (req, res) => {
 
     if (exists.length) {
       await pool.query(
-        `UPDATE tutors
-         SET full_name=?, birth_date=?, avatar=?, cccd_front=?, cccd_back=?,
-             certificates=?, bio=?, education_level=?, major=?, university=?,
-             experience=?, status='PENDING', created_at=NOW()
-         WHERE user_id=?`,
+        `UPDATE tutors SET full_name=?, birth_date=?, avatar=?, cccd_front=?, cccd_back=?,
+         certificates=?, bio=?, education_level=?, major=?, university=?, experience=?, 
+         status='PENDING', created_at=NOW() WHERE user_id=?`,
         [
           full_name,
           birth_date,
@@ -169,7 +189,7 @@ router.post("/submit-cv", verifyToken, async (req, res) => {
       );
     } else {
       await pool.query(
-        `INSERT INTO tutors
+        `INSERT INTO tutors 
         (user_id, full_name, birth_date, avatar, cccd_front, cccd_back, certificates, bio,
          education_level, major, university, experience, status, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', NOW())`,
@@ -196,45 +216,10 @@ router.post("/submit-cv", verifyToken, async (req, res) => {
     });
   } catch (err) {
     console.error("❌ Submit CV error:", err);
-    res.status(500).json({
-      success: false,
-      message: "Server error: " + err.message,
-    });
+    res
+      .status(500)
+      .json({ success: false, message: "Server error: " + err.message });
   }
 });
-
-/**
- * ============================================================
- *  ⚙️ 5. Admin/Cskh duyệt hồ sơ (approve/reject)
- * ============================================================
- */
-router.put(
-  "/:id/approve",
-  verifyToken,
-  requireRole(["admin", "cskh"]),
-  async (req, res) => {
-    try {
-      const { status } = req.body;
-      if (!["APPROVED", "REJECTED"].includes(status)) {
-        return res
-          .status(400)
-          .json({ success: false, message: "Invalid status" });
-      }
-
-      await pool.query(
-        "UPDATE tutors SET status=?, approved_by=?, approved_at=NOW() WHERE tutor_id=?",
-        [status, req.user.user_id, req.params.id]
-      );
-
-      res.json({ success: true, message: `Tutor ${status}` });
-    } catch (err) {
-      console.error("Tutor approve error:", err);
-      res.status(500).json({
-        success: false,
-        message: "Server error: " + err.message,
-      });
-    }
-  }
-);
 
 export default router;

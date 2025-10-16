@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import morgan from "morgan";
 import dotenv from "dotenv";
+import fs from "fs";
 
 import authRoutes from "./routes/auth.js";
 import userRoutes from "./routes/users.js";
@@ -16,17 +17,23 @@ import payoutRoutes from "./routes/payouts.js";
 import complaintRoutes from "./routes/complaints.js";
 import notificationRoutes from "./routes/notifications.js";
 import ratingRoutes from "./routes/ratings.js";
+import uploadRoutes from "./routes/upload.js";
+import requestRoutes from "./routes/requests.js";
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// Middlewares
+// ✅ Middlewares
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(morgan("dev"));
 
-// ===== Routes =====
+// ✅ Tạo thư mục uploads nếu chưa có
+if (!fs.existsSync("uploads")) fs.mkdirSync("uploads");
+
+// ✅ Routes
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/tutors", tutorRoutes);
@@ -39,15 +46,27 @@ app.use("/api/payouts", payoutRoutes);
 app.use("/api/complaints", complaintRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/ratings", ratingRoutes);
-import uploadRoutes from "./routes/upload.js";
 app.use("/api/upload", uploadRoutes);
+app.use("/api/requests", requestRoutes);
+// ✅ Static file (ảnh upload)
 app.use("/uploads", express.static("uploads"));
-// Default route
+
+// ✅ Route mặc định
 app.get("/", (req, res) => {
   res.send("🚀 Website Dạy Thêm API is running...");
 });
 
-// Start
+// ✅ Middleware xử lý lỗi chung
+app.use((req, res, next) => {
+  res.status(404).json({ success: false, message: "API endpoint not found" });
+});
+
+app.use((err, req, res, next) => {
+  console.error("❌ Server error:", err.stack);
+  res.status(500).json({ success: false, message: "Internal server error" });
+});
+
+// ✅ Khởi động server
 app.listen(PORT, () => {
   console.log(`✅ Server running at http://localhost:${PORT}`);
 });

@@ -1,9 +1,9 @@
-import { Router } from "express";
+import express from "express";
 import { pool } from "../config/db.js";
 import { verifyToken } from "../middlewares/auth.js";
 import { requireRoles } from "../middlewares/roles.js";
 
-const router = Router();
+const router = express.Router();
 
 /* =========================================================
    POST /api/classes (student tạo lớp → chờ admin duyệt)
@@ -15,59 +15,58 @@ router.post("/", verifyToken, requireRoles("student"), async (req, res) => {
       grade,
       schedule,
       tuition_amount,
-      visibility = "PUBLIC",
       lat,
       lng,
       city,
+      district,
+      ward,
+      address,
     } = req.body || {};
 
-    if (!subject || !grade || !schedule || !tuition_amount) {
+    if (!subject || !grade || !schedule || !tuition_amount)
       return res
         .status(400)
-        .json({ success: false, message: "Missing required fields" });
-    }
+        .json({ success: false, message: "Thiếu thông tin bắt buộc." });
 
-    const finalLat = lat || 10.7769;
-    const finalLng = lng || 106.7009;
+    const scheduleData =
+      typeof schedule === "object" ? JSON.stringify(schedule) : schedule;
+    const finalLat = parseFloat(lat) || 10.7769;
+    const finalLng = parseFloat(lng) || 106.7009;
+    const finalTuition = parseFloat(tuition_amount);
+    const studentId = req.user.user_id || req.user.id;
 
+    // ✅ lớp mới luôn ở trạng thái chờ duyệt và riêng tư
     const [rs] = await pool.query(
       `INSERT INTO classes(
         student_id, subject, grade, schedule, tuition_amount,
-        visibility, status, lat, lng, city
+        visibility, status, lat, lng, city, district, ward, address
       )
-      VALUES (?,?,?,?,?,?, 'PENDING_ADMIN_APPROVAL', ?, ?, ?)`,
+      VALUES (?,?,?,?,?,?,?, ?, ?, ?, ?, ?, ?)`,
       [
-        req.user.user_id,
+        studentId,
         subject,
         grade,
-        schedule,
-        parseFloat(tuition_amount),
-        visibility,
+        scheduleData,
+        finalTuition,
+        "PRIVATE",
+        "PENDING_ADMIN_APPROVAL",
         finalLat,
         finalLng,
         city || "Hồ Chí Minh",
+        district || null,
+        ward || null,
+        address || null,
       ]
     );
 
     res.status(201).json({
       success: true,
-      message: "Class created and pending admin approval",
-      class: {
-        class_id: rs.insertId,
-        student_id: req.user.user_id,
-        subject,
-        grade,
-        schedule,
-        tuition_amount: parseFloat(tuition_amount),
-        status: "PENDING_ADMIN_APPROVAL",
-        lat: finalLat,
-        lng: finalLng,
-        city: city || "Hồ Chí Minh",
-      },
+      message: "✅ Lớp đã được tạo, chờ admin duyệt.",
+      data: { class_id: rs.insertId },
     });
   } catch (err) {
     console.error("❌ Create class error:", err);
-    res.status(500).json({ success: false, message: "Server error" });
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
@@ -80,13 +79,13 @@ router.put(
   requireRoles("admin"),
   async (req, res) => {
     try {
-      await pool.query("UPDATE classes SET status=? WHERE class_id=?", [
-        "APPROVED_VISIBLE",
-        req.params.id,
-      ]);
+      await pool.query(
+        "UPDATE classes SET status=?, visibility=? WHERE class_id=?",
+        ["APPROVED_VISIBLE", "PUBLIC", req.params.id]
+      );
       res.json({
         success: true,
-        message: "Class approved and visible to tutors",
+        message: "✅ Lớp đã được duyệt và hiển thị công khai.",
       });
     } catch (err) {
       console.error("❌ Approve class error:", err);
@@ -96,7 +95,7 @@ router.put(
 );
 
 /* =========================================================
- // PUT /api/classes/:id/reject  (admin từ chối lớp)//
+   PUT /api/classes/:id/reject (admin từ chối lớp)
 ========================================================= */
 router.put(
   "/:id/reject",
@@ -104,43 +103,32 @@ router.put(
   requireRoles("admin"),
   async (req, res) => {
     try {
-      const classId = req.params.id;
       const reason = req.body?.reason || "Không có lý do";
-
-      // Check class tồn tại
-      const [rows] = await pool.query(
-        "SELECT * FROM classes WHERE class_id=?",
-        [classId]
-      );
-      if (!rows.length) {
-        return res
-          .status(404)
-          .json({ success: false, message: "Class not found" });
-      }
-
-      // Update
       await pool.query(
-        "UPDATE classes SET status=?, admin_reject_reason=?, admin_reject_at=NOW() WHERE class_id=?",
-        ["REJECTED", reason, classId]
+        "UPDATE classes SET status=?, visibility=?, admin_reject_reason=?, admin_reject_at=NOW() WHERE class_id=?",
+        ["REJECTED", "PRIVATE", reason, req.params.id]
       );
-
-      res.json({ success: true, message: "Class rejected", reason });
+      res.json({ success: true, message: "❌ Lớp đã bị từ chối." });
     } catch (err) {
       console.error("❌ Reject class error:", err);
-      return res.status(500).json({ success: false, message: err.message });
+      res.status(500).json({ success: false, message: err.message });
     }
   }
 );
 
 /* =========================================================
-   GET /api/classes (lọc theo status, subject)
+   GET /api/classes (gia sư: chỉ thấy lớp công khai đã duyệt)
 ========================================================= */
-router.get("/", async (req, res) => {
+router.get("/", verifyToken, async (req, res) => {
   try {
-    const { status, subject } = req.query || {};
+    const { subject } = req.query || {};
+    const role = req.user.role;
+    const userId = req.user.user_id || req.user.id;
+
     let sql = `
       SELECT c.class_id, c.subject, c.grade, c.schedule, 
-             c.tuition_amount, c.status, c.lat, c.lng, c.city,
+             c.tuition_amount, c.status, c.lat, c.lng, 
+             c.city, c.district, c.ward,
              u.full_name AS student_name
       FROM classes c 
       JOIN users u ON u.user_id = c.student_id 
@@ -148,94 +136,28 @@ router.get("/", async (req, res) => {
     `;
     const params = [];
 
-    if (status) {
-      sql += " AND c.status=?";
-      params.push(status);
-    }
-    if (subject) {
-      sql += " AND c.subject=?";
-      params.push(subject);
+    if (role === "student") {
+      sql += " AND c.student_id = ?";
+      params.push(userId);
+    } else if (role === "tutor") {
+      sql +=
+        " AND c.status = 'APPROVED_VISIBLE' AND c.visibility = 'PUBLIC' AND c.selected_tutor_id IS NULL";
     }
 
+    if (subject) {
+      sql += " AND c.subject LIKE ?";
+      params.push(`%${subject}%`);
+    }
+
+    sql += " ORDER BY c.created_at DESC";
     const [rows] = await pool.query(sql, params);
-    res.json(rows);
+
+    res.json({ success: true, data: rows });
   } catch (err) {
     console.error("❌ Classes list error:", err);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
-
-/* =========================================================
-   GET /api/classes/:id (chi tiết 1 lớp)
-========================================================= */
-router.get("/:id", async (req, res) => {
-  try {
-    const [rows] = await pool.query(
-      `SELECT c.*, 
-              s.full_name AS student_name, 
-              t.tutor_id, 
-              ut.full_name AS selected_tutor_name
-       FROM classes c 
-       JOIN users s ON s.user_id=c.student_id
-       LEFT JOIN tutors t ON t.tutor_id=c.selected_tutor_id
-       LEFT JOIN users ut ON ut.user_id=t.user_id
-       WHERE c.class_id=?`,
-      [req.params.id]
-    );
-
-    if (!rows.length) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Class not found" });
-    }
-
-    res.json(rows[0]);
-  } catch (err) {
-    console.error("❌ Class detail error:", err);
-    res.status(500).json({ success: false, message: "Server error" });
-  }
-});
-
-/* =========================================================
-   POST /api/classes/:id/apply (tutor apply)
-========================================================= */
-router.post(
-  "/:id/apply",
-  verifyToken,
-  requireRoles("tutor"),
-  async (req, res) => {
-    try {
-      const { message } = req.body || {};
-      const [cls] = await pool.query(
-        "SELECT student_id FROM classes WHERE class_id=?",
-        [req.params.id]
-      );
-
-      if (!cls.length)
-        return res
-          .status(404)
-          .json({ success: false, message: "Class not found" });
-
-      await pool.query(
-        "INSERT INTO notifications (user_id, title, message, type) VALUES (?,?,?,?)",
-        [
-          cls[0].student_id,
-          "Có gia sư ứng tuyển",
-          `Gia sư #${req.user.user_id} ứng tuyển: ${message || ""}`,
-          "CLASS_UPDATE",
-        ]
-      );
-
-      res.status(201).json({
-        success: true,
-        message: "Application submitted, student notified",
-      });
-    } catch (err) {
-      console.error("❌ Class apply error:", err);
-      res.status(500).json({ success: false, message: "Server error" });
-    }
-  }
-);
 
 /* =========================================================
    PUT /api/classes/:id/select-tutor (student chọn tutor)
@@ -252,19 +174,19 @@ router.put(
         [req.params.id]
       );
 
-      if (!own.length || own[0].student_id !== req.user.user_id) {
+      if (!own.length || own[0].student_id !== req.user.user_id)
         return res.status(403).json({ success: false, message: "Forbidden" });
-      }
 
+      // ✅ Khi chọn gia sư → chuyển sang IN_PROGRESS, ẩn lớp
       await pool.query(
-        "UPDATE classes SET selected_tutor_id=?, status=? WHERE class_id=?",
-        [tutor_id, "AWAITING_PAYMENTS", req.params.id]
+        "UPDATE classes SET selected_tutor_id=?, status=?, visibility=? WHERE class_id=?",
+        [tutor_id, "IN_PROGRESS", "PRIVATE", req.params.id]
       );
 
       res.json({
         success: true,
-        message: "Tutor selected, waiting for payment",
-        class_status: "AWAITING_PAYMENTS",
+        message: "🎯 Gia sư đã được chọn, lớp chuyển sang trạng thái đang học.",
+        class_status: "IN_PROGRESS",
       });
     } catch (err) {
       console.error("❌ Select tutor error:", err);
@@ -274,58 +196,61 @@ router.put(
 );
 
 /* =========================================================
-   PUT /api/classes/:id/complete (admin)
+   PUT /api/classes/:id/complete (admin hoặc tutor kết thúc)
 ========================================================= */
-router.put(
-  "/:id/complete",
-  verifyToken,
-  requireRoles("admin"),
-  async (req, res) => {
-    try {
-      await pool.query("UPDATE classes SET status=? WHERE class_id=?", [
-        "DONE",
-        req.params.id,
-      ]);
-      res.json({
-        success: true,
-        message: "Class marked as completed",
-        class_status: "DONE",
-      });
-    } catch (err) {
-      console.error("❌ Complete class error:", err);
-      res.status(500).json({ success: false, message: "Server error" });
-    }
-  }
-);
-
-/* =========================================================
-   PUT /api/classes/:id/cancel (student/tutor yêu cầu)
-========================================================= */
-router.put("/:id/cancel", verifyToken, async (req, res) => {
+router.put("/:id/complete", verifyToken, async (req, res) => {
   try {
-    const { reason } = req.body || {};
-    const [cskh] = await pool.query(
-      "SELECT user_id FROM users WHERE role IN ('cskh','admin') LIMIT 1"
-    );
+    const userRole = req.user.role;
+    const userId = req.user.user_id;
 
-    if (cskh.length) {
-      await pool.query(
-        "INSERT INTO notifications (user_id, title, message, type) VALUES (?,?,?,?)",
-        [
-          cskh[0].user_id,
-          "Yêu cầu hủy lớp",
-          `Class #${req.params.id} yêu cầu hủy: ${reason || ""}`,
-          "CLASS_UPDATE",
-        ]
-      );
-    }
+    const [rows] = await pool.query(
+      "SELECT selected_tutor_id FROM classes WHERE class_id=?",
+      [req.params.id]
+    );
+    if (!rows.length)
+      return res
+        .status(404)
+        .json({ success: false, message: "Class not found" });
+
+    if (userRole !== "admin" && userId !== rows[0].selected_tutor_id)
+      return res
+        .status(403)
+        .json({ success: false, message: "Không có quyền hoàn tất lớp này" });
+
+    await pool.query(
+      "UPDATE classes SET status=?, visibility=?, completed_at=NOW() WHERE class_id=?",
+      ["DONE", "PRIVATE", req.params.id]
+    );
 
     res.json({
       success: true,
-      message: "Cancel request sent, waiting for approval from CSKH/Admin",
+      message: "🏁 Lớp đã hoàn tất.",
+      class_status: "DONE",
     });
   } catch (err) {
-    console.error("❌ Cancel class error:", err);
+    console.error("❌ Complete class error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+/* =========================================================
+   GET /api/classes/mine (học viên xem lớp đã đăng)
+========================================================= */
+router.get("/mine", verifyToken, requireRoles("student"), async (req, res) => {
+  try {
+    const studentId = req.user.user_id;
+    const [rows] = await pool.query(
+      `SELECT class_id, subject, grade, schedule, tuition_amount, 
+              status, visibility, created_at, city, district, ward
+       FROM classes
+       WHERE student_id = ?
+       ORDER BY created_at DESC`,
+      [studentId]
+    );
+
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    console.error("❌ Get my classes error:", err);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
