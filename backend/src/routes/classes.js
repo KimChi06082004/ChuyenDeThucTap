@@ -79,14 +79,28 @@ router.put(
   requireRoles("admin"),
   async (req, res) => {
     try {
-      await pool.query(
-        "UPDATE classes SET status=?, visibility=? WHERE class_id=?",
-        ["APPROVED_VISIBLE", "PUBLIC", req.params.id]
+      const [rows] = await pool.query(
+        "SELECT status FROM classes WHERE class_id=?",
+        [req.params.id]
       );
-      res.json({
-        success: true,
-        message: "✅ Lớp đã được duyệt và hiển thị công khai.",
-      });
+      if (!rows.length)
+        return res
+          .status(404)
+          .json({ success: false, message: "Không tìm thấy lớp học." });
+
+      const current = rows[0].status;
+      if (["APPROVED_VISIBLE", "REJECTED", "DONE"].includes(current)) {
+        return res.status(400).json({
+          success: false,
+          message: "Lớp đã được xử lý, không thể duyệt lại.",
+        });
+      }
+
+      await pool.query(
+        "UPDATE classes SET status='APPROVED_VISIBLE' WHERE class_id=?",
+        [req.params.id]
+      );
+      res.json({ success: true, message: "✅ Lớp đã được duyệt." });
     } catch (err) {
       console.error("❌ Approve class error:", err);
       res.status(500).json({ success: false, message: "Server error" });
@@ -251,6 +265,56 @@ router.get("/mine", verifyToken, requireRoles("student"), async (req, res) => {
     res.json({ success: true, data: rows });
   } catch (err) {
     console.error("❌ Get my classes error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+/* =========================================================
+   PUT /api/classes/:id/approve-cancel (admin duyệt yêu cầu hủy)
+========================================================= */
+router.put(
+  "/:id/approve-cancel",
+  verifyToken,
+  requireRoles("admin"),
+  async (req, res) => {
+    try {
+      await pool.query(
+        "UPDATE classes SET status=?, visibility=? WHERE class_id=?",
+        ["CANCELLED", "PRIVATE", req.params.id]
+      );
+      res.json({ success: true, message: "✅ Lớp đã được duyệt hủy." });
+    } catch (err) {
+      console.error("❌ Approve cancel error:", err);
+      res.status(500).json({ success: false, message: "Server error" });
+    }
+  }
+);
+/* =========================================================
+   DELETE /api/classes/:id (admin xóa lớp)
+========================================================= */
+router.delete("/:id", verifyToken, requireRoles("admin"), async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      "SELECT status FROM classes WHERE class_id=?",
+      [req.params.id]
+    );
+    if (!rows.length)
+      return res
+        .status(404)
+        .json({ success: false, message: "Không tìm thấy lớp học." });
+
+    const current = rows[0].status;
+    if (["IN_PROGRESS"].includes(current)) {
+      return res.status(400).json({
+        success: false,
+        message: "Không thể xóa lớp đang được dạy.",
+      });
+    }
+
+    await pool.query("DELETE FROM classes WHERE class_id=?", [req.params.id]);
+    res.json({ success: true, message: "🗑️ Lớp đã bị xóa vĩnh viễn." });
+  } catch (err) {
+    console.error("❌ Delete class error:", err);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
